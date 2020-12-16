@@ -2,7 +2,9 @@ from flask import Flask, jsonify, request
 from flask_restful import Api, Resource
 from pymongo import MongoClient
 import bcrypt
-import spacy
+import requests
+import subprocess
+import json
 
 # Set-up App
 app = Flask(__name__)
@@ -10,7 +12,7 @@ api = Api(app)
 
 # Initiallize db connection
 client = MongoClient("mongodb://db:27017")
-db = client.SimilarityDB
+db = client.ImageRecognition
 users = db["users"]
 
 # Helper functions
@@ -61,15 +63,14 @@ class Register(Resource):
                 "msg": "User was sucessfully created"
         }))
 
-class Detect(Resource):
+class Classify(Resource):
     def post(self):
         postedData = request.get_json()
         
         # Parse inputs
         username = postedData["username"]
         password = postedData["password"]
-        text1 = postedData["text1"]
-        text2 = postedData["text2"]
+        url = postedData["url"]
 
         if not user_exists(username):
             return(jsonify({
@@ -90,13 +91,21 @@ class Detect(Resource):
                     "msg": "You don't have sufficient tokens!"
                 }))
 
-        # Calculate the edit-distance
-        nlp = spacy.load("en_core_web_sm")    
-        text1_tokenized = nlp(text1)
-        text2_tokenized = nlp(text2)
-        
-        similarity = text1_tokenized.similarity(text2_tokenized)
-        
+        # Download the image
+        this_request = requests.get(url)
+        with open("/usr/web/tmp.jpg", "wb") as file_handler:
+            file_handler.write(this_request.content)
+    
+        # Classify the image
+        proc = subprocess.Popen('/usr/local/bin/python /usr/web/classify_image.py --model_dir=/usr/web/ --image_file=/usr/web/tmp.jpg', shell=True)
+        proc.communicate()[0]
+        proc.wait()
+        print(proc.stdout)
+        print(proc.stderr)
+        with open("prediction_results.json") as file_handler:
+            results_classification = json.load(file_handler)
+
+        # Reduce the number of tokens for the user
         users.update({
             "Username": username
             }, {"$set":{
@@ -104,11 +113,11 @@ class Detect(Resource):
                 }
             })
 
-        return(jsonify({
+        # Return information to user
+        return(jsonify({ **results_classification, **{
              "status": 200,
-             "similariy": similarity,
              "msg": "Similarity score calculated"
-            }))
+            }}))
 
 class Refill(Resource):
     def post(self):
@@ -147,7 +156,7 @@ class Refill(Resource):
             }))
 
 api.add_resource(Register, "/register")
-api.add_resource(Detect, "/detect")
+api.add_resource(Classify, "/classify")
 api.add_resource(Refill, "/refill")
 
 if __name__ == "__main__":
